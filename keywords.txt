@@ -1,0 +1,13 @@
+STM32CanFD	KEYWORD1
+begin	KEYWORD2
+end	KEYWORD2
+setPins	KEYWORD2
+beginPacket	KEYWORD2
+endPacket	KEYWORD2
+parsePacket	KEYWORD2
+fd	KEYWORD2
+classic	KEYWORD2
+standard	KEYWORD2
+extended	KEYWORD2
+packetId	KEYWORD2
+packetDlc	KEYWORD2
