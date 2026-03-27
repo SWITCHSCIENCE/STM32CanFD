@@ -1,16 +1,16 @@
 #include "STM32CanFD.h"
 
 /* 送信フォーマット指定用 */
-#define CAN_FMT_AUTO -1
-#define CAN_FMT_CLASSIC 0
-#define CAN_FMT_FD 1
 
 // 複数のインスタンス管理用
 static STM32CanFD *_instances[3] = {NULL, NULL, NULL};
 
 STM32CanFD::STM32CanFD(FDCAN_GlobalTypeDef *instance)
-    : _rxPin(NC), _txPin(NC), _mode(FDCAN_MODE_NORMAL), _is_fd_enabled(false),
+    : _rxPin(NC), _txPin(NC), _mode(FDCAN_MODE_NORMAL)
+#if STM32CANFD_STREAM_API
+      ,
       _rxHead(0), _rxTail(0)
+#endif
 {
     _hfdcan.Instance = instance;
     if (instance == FDCAN1)
@@ -51,6 +51,8 @@ bool STM32CanFD::begin(uint32_t nomBaud, uint32_t dataBaud)
     _hfdcan.Init.TransmitPause = DISABLE;
     _hfdcan.Init.ProtocolException = DISABLE;
     _hfdcan.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
+    _hfdcan.Init.StdFiltersNbr = 28;
+    _hfdcan.Init.ExtFiltersNbr = 8;
 
     applyBaudrate(nomBaud, dataBaud);
 
@@ -104,7 +106,7 @@ bool STM32CanFD::begin(uint32_t nomBaud, uint32_t dataBaud)
     HAL_FDCAN_ConfigGlobalFilter(&_hfdcan, FDCAN_ACCEPT_IN_RX_FIFO0, FDCAN_ACCEPT_IN_RX_FIFO0, FDCAN_FILTER_REMOTE, FDCAN_FILTER_REMOTE);
 
     // 割り込み設定
-    HAL_FDCAN_ActivateNotification(&_hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE, 0);
+    HAL_FDCAN_ActivateNotification(&_hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_NEW_MESSAGE, 0);
 
     IRQn_Type irq0, irq1;
     if (_hfdcan.Instance == FDCAN1) {
@@ -193,7 +195,6 @@ void STM32CanFD::applyBaudrate(uint32_t nom, uint32_t data)
     // --- Data Phase 設定 ---
     if (data > 0)
     {
-        _is_fd_enabled = true;
         bool dataFound = false;
         
         for (const auto& timing : dataTimings) {
@@ -223,82 +224,57 @@ void STM32CanFD::applyBaudrate(uint32_t nom, uint32_t data)
     }
     else
     {
-        _is_fd_enabled = false;
         HAL_FDCAN_DisableTxDelayCompensation(&_hfdcan);
     }
 }
-// void STM32CanFD::applyBaudrate(uint32_t nom, uint32_t data)
-// {
-//     // 170MHz / 500kbps = 340 Tq
-//     // Prescaler 2 => 170 Tq. Sync=1, Seg1=135, Seg2=34 (SP=80%)
-//     _hfdcan.Init.NominalPrescaler = 2;
-//     _hfdcan.Init.NominalTimeSeg1 = 135;
-//     _hfdcan.Init.NominalTimeSeg2 = 34;
-//     _hfdcan.Init.NominalSyncJumpWidth = 17;
-
-//     if (data > 0)
-//     {
-//         _is_fd_enabled = true;
-//         // 170MHz / 1Mbps = 85 Tq
-//         // Prescaler 5 => 85 Tq. Sync=1, Seg1=67, Seg2=17 (SP=80%)
-//         _hfdcan.Init.DataPrescaler = 5;
-//         _hfdcan.Init.DataTimeSeg1 = 12;
-//         _hfdcan.Init.DataTimeSeg2 = 4;
-//         _hfdcan.Init.DataSyncJumpWidth = 2;
-
-//         // TDC設定 (BRS時に必須)
-//         HAL_FDCAN_ConfigTxDelayCompensation(&_hfdcan, 20, 0);
-//         HAL_FDCAN_EnableTxDelayCompensation(&_hfdcan);
-//     }
-//     else
-//     {
-//         _is_fd_enabled = false;
-//     }
-// }
 
 /* --- 送信ロジック --- */
 
+#if STM32CANFD_STREAM_API
 STM32CanFD &STM32CanFD::beginPacket(uint32_t id)
 {
-    _txHeader.Identifier = id;
-    _txHeader.IdType = (id > 0x7FF) ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
-    _txHeader.TxFrameType = FDCAN_DATA_FRAME;
-    _txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-    _txHeader.BitRateSwitch = _is_fd_enabled ? FDCAN_BRS_ON : FDCAN_BRS_OFF;
-    _txHeader.FDFormat = _is_fd_enabled ? FDCAN_FD_CAN : FDCAN_CLASSIC_CAN;
-    _txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-    _txHeader.MessageMarker = 0;
-
+    _txHeader.identifier = id;
+    _txHeader.dataLength = 0;
+    _txHeader.extended = (id > 0x7FF) ? 1 : 0;
+    _txHeader.remote = 0;
+    _txHeader.fdFormat = 0;
+    _txHeader.brs = 0;
+    _txHeader.esiPassive = 0;
+    if (_hfdcan.Init.FrameFormat != FDCAN_FRAME_CLASSIC)
+    {
+        _txHeader.fdFormat = 1;
+        _txHeader.brs = 1;
+    }
     _txBufferIdx = 0;
-    _txFormat = CAN_FMT_AUTO;
+    _txFormatExplicit = false;
     return *this;
 }
 
 STM32CanFD &STM32CanFD::standard()
 {
-    _txHeader.IdType = FDCAN_STANDARD_ID;
+    _txHeader.extended = 0;
     return *this;
 }
 
 STM32CanFD &STM32CanFD::extended()
 {
-    _txHeader.IdType = FDCAN_EXTENDED_ID;
+    _txHeader.extended = 1;
     return *this;
 }
 
 STM32CanFD &STM32CanFD::fd(bool brs)
 {
-    _txHeader.FDFormat = FDCAN_FD_CAN;
-    _txHeader.BitRateSwitch = brs ? FDCAN_BRS_ON : FDCAN_BRS_OFF;
-    _txFormat = CAN_FMT_FD;
+    _txHeader.fdFormat = 1;
+    _txHeader.brs = brs ? 1 : 0;
+    _txFormatExplicit = true;
     return *this;
 }
 
 STM32CanFD &STM32CanFD::classic()
 {
-    _txHeader.FDFormat = FDCAN_CLASSIC_CAN;
-    _txHeader.BitRateSwitch = FDCAN_BRS_OFF;
-    _txFormat = CAN_FMT_CLASSIC;
+    _txHeader.fdFormat = 0;
+    _txHeader.brs = 0;
+    _txFormatExplicit = true;
     return *this;
 }
 
@@ -322,50 +298,105 @@ size_t STM32CanFD::write(const uint8_t *buffer, size_t size)
 
 int STM32CanFD::endPacket()
 {
-    if (_txFormat == CAN_FMT_AUTO && _txBufferIdx > 8)
+    if (!_txFormatExplicit && _txBufferIdx > 8)
     {
-        _txHeader.FDFormat = FDCAN_FD_CAN;
+        _txHeader.fdFormat = 1;
     }
 
-    _txHeader.DataLength = len2dlc(_txBufferIdx);
+    _txHeader.dataLength = len2dlc(_txBufferIdx);
 
-    // パディング (CAN FDはDLCで規定された長さに合わせる必要がある)
-    size_t fullLen = dlc2len(_txHeader.DataLength);
+    size_t fullLen = dlc2len(_txHeader.dataLength);
     if (fullLen > _txBufferIdx)
     {
         memset(&_txData[_txBufferIdx], 0, fullLen - _txBufferIdx);
     }
 
-    if (HAL_FDCAN_AddMessageToTxFifoQ(&_hfdcan, &_txHeader, _txData) != HAL_OK)
-    {
-        return 0;
-    }
-    return 1;
+    return sendPacket(_txHeader, _txData, _txBufferIdx) ? 1 : 0;
 }
 
 /* --- 受信ロジック --- */
 
 bool STM32CanFD::parsePacket()
 {
-    // リングバッファに溜まっているデータがあるか確認
-    // 本実装では簡易化のため、HALから直接FIFOを確認し、
-    // Streamとして読めるように内部バッファへコピーする
-    if (HAL_FDCAN_GetRxFifoFillLevel(&_hfdcan, FDCAN_RX_FIFO0) > 0)
+    uint32_t level0 = HAL_FDCAN_GetRxFifoFillLevel(&_hfdcan, FDCAN_RX_FIFO0);
+    uint32_t level1 = HAL_FDCAN_GetRxFifoFillLevel(&_hfdcan, FDCAN_RX_FIFO1);
+    uint8_t fifo = 0;
+
+    if (level0 > 0)
     {
-        if (HAL_FDCAN_GetRxMessage(&_hfdcan, FDCAN_RX_FIFO0, &_rxHeader, _rxBuffer) == HAL_OK)
-        {
-            _currentRx.length = dlc2len(_rxHeader.DataLength);
-            _rxHead = _currentRx.length;
-            _rxTail = 0;
-            return true;
-        }
+        fifo = 0;
     }
-    return false;
+    else if (level1 > 0)
+    {
+        fifo = 1;
+    }
+    else
+    {
+        return false;
+    }
+
+    int received = readPacket(fifo, &_currentRx.header, _rxBuffer);
+    if (received < 0)
+        return false;
+
+    _currentRx.length = (uint8_t)received;
+    _currentRx.fifo = fifo;
+    _rxHead = _currentRx.length;
+    _rxTail = 0;
+    return true;
+}
+#endif
+
+int STM32CanFD::readPacket(uint8_t fifo, CanMessageHeader *header, uint8_t *buffer)
+{
+    if (fifo > 1 || header == nullptr || buffer == nullptr)
+        return -1;
+
+    FDCAN_RxHeaderTypeDef rxHeader;
+    uint32_t fifoType = (fifo == 0) ? FDCAN_RX_FIFO0 : FDCAN_RX_FIFO1;
+    if (HAL_FDCAN_GetRxMessage(&_hfdcan, fifoType, &rxHeader, buffer) != HAL_OK)
+        return -1;
+
+    *header = compactRxHeader(rxHeader);
+    return (int)dlc2len(header->dataLength);
 }
 
+bool STM32CanFD::sendPacket(const CanMessageHeader &header, const uint8_t *data, size_t len)
+{
+    (void)len;
+
+    FDCAN_TxHeaderTypeDef txHeader = expandTxHeader(header);
+    return HAL_FDCAN_AddMessageToTxFifoQ(&_hfdcan, &txHeader, (uint8_t *)data) == HAL_OK;
+}
+
+bool STM32CanFD::setFilter(uint8_t index, uint32_t id, uint32_t mask, bool isExtended, int fifo)
+{
+    FDCAN_FilterTypeDef sFilterConfig;
+    sFilterConfig.IdType = isExtended ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
+    sFilterConfig.FilterIndex = index;
+    sFilterConfig.FilterType = FDCAN_FILTER_MASK;
+    sFilterConfig.FilterConfig = (fifo == 1) ? FDCAN_FILTER_TO_RXFIFO1 : FDCAN_FILTER_TO_RXFIFO0;
+    sFilterConfig.FilterID1 = id;
+    sFilterConfig.FilterID2 = mask;
+
+    return HAL_FDCAN_ConfigFilter(&_hfdcan, &sFilterConfig) == HAL_OK;
+}
+
+uint32_t STM32CanFD::getErrorCode()
+{
+    return HAL_FDCAN_GetError(&_hfdcan);
+}
+
+bool STM32CanFD::isBusOff()
+{
+    return (_hfdcan.Instance->PSR & FDCAN_PSR_BO) != 0;
+}
+
+#if STM32CANFD_STREAM_API
 int STM32CanFD::available() { return _rxHead - _rxTail; }
 int STM32CanFD::read() { return (available()) ? _rxBuffer[_rxTail++] : -1; }
 int STM32CanFD::peek() { return (available()) ? _rxBuffer[_rxTail] : -1; }
+#endif
 
 /* --- ユーティリティ --- */
 
@@ -410,6 +441,34 @@ size_t STM32CanFD::dlc2len(uint32_t dlc)
         return 64;
     }
     return 0;
+}
+
+FDCAN_TxHeaderTypeDef STM32CanFD::expandTxHeader(const CanMessageHeader &header)
+{
+    FDCAN_TxHeaderTypeDef halHeader = {};
+    halHeader.Identifier = header.identifier;
+    halHeader.IdType = header.extended ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
+    halHeader.TxFrameType = header.remote ? FDCAN_REMOTE_FRAME : FDCAN_DATA_FRAME;
+    halHeader.DataLength = header.dataLength;
+    halHeader.ErrorStateIndicator = header.esiPassive ? FDCAN_ESI_PASSIVE : FDCAN_ESI_ACTIVE;
+    halHeader.BitRateSwitch = header.brs ? FDCAN_BRS_ON : FDCAN_BRS_OFF;
+    halHeader.FDFormat = header.fdFormat ? FDCAN_FD_CAN : FDCAN_CLASSIC_CAN;
+    halHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    halHeader.MessageMarker = 0;
+    return halHeader;
+}
+
+STM32CanFD::CanMessageHeader STM32CanFD::compactRxHeader(const FDCAN_RxHeaderTypeDef &header)
+{
+    CanMessageHeader compact = {};
+    compact.identifier = header.Identifier;
+    compact.dataLength = (uint8_t)header.DataLength;
+    compact.extended = (header.IdType == FDCAN_EXTENDED_ID) ? 1 : 0;
+    compact.remote = (header.RxFrameType == FDCAN_REMOTE_FRAME) ? 1 : 0;
+    compact.fdFormat = (header.FDFormat == FDCAN_FD_CAN) ? 1 : 0;
+    compact.brs = (header.BitRateSwitch == FDCAN_BRS_ON) ? 1 : 0;
+    compact.esiPassive = (header.ErrorStateIndicator == FDCAN_ESI_PASSIVE) ? 1 : 0;
+    return compact;
 }
 
 // 割り込みハンドラの実装

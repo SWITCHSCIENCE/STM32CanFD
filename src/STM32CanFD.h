@@ -3,27 +3,39 @@
 
 #include <Arduino.h>
 
+#if defined(STM32CANFD_DISABLE_STREAM_API)
+#define STM32CANFD_STREAM_API 0
+#else
+#define STM32CANFD_STREAM_API 1
+#endif
+
+#if STM32CANFD_STREAM_API
 class STM32CanFD : public Stream
+#else
+class STM32CanFD
+#endif
 {
 public:
+    struct CanMessageHeader
+    {
+        uint32_t identifier;
+        uint8_t dataLength;
+        uint8_t extended : 1;
+        uint8_t remote : 1;
+        uint8_t fdFormat : 1;
+        uint8_t brs : 1;
+        uint8_t esiPassive : 1;
+    };
+
     STM32CanFD(FDCAN_GlobalTypeDef *instance = FDCAN1);
     ~STM32CanFD();
 
-    // ピン設定 (Arduinoのピン番号。MspInitでAlternate Functionを設定)
     void setPins(uint32_t rxPin, uint32_t txPin);
-
-    /**
-     * ボーレート設定 (170MHz FDCANクロックに最適化された計算を行います)
-     * @param nomBaud   仲裁フェーズ (例: 500000)
-     * @param dataBaud  データフェーズ (例: 2000000) 0でClassic CANモード
-     */
     bool begin(uint32_t nomBaud = 500000, uint32_t dataBaud = 2000000);
     void end();
+    void setMode(uint32_t mode = FDCAN_MODE_NORMAL);
 
-    // モード設定 (begin前に呼び出し)
-    void setMode(uint32_t mode = FDCAN_MODE_NORMAL); // FDCAN_MODE_EXTERNAL_LOOPBACK等
-
-    /* --- 送信関連 (メソッドチェーン) --- */
+#if STM32CANFD_STREAM_API
     STM32CanFD &beginPacket(uint32_t id);
     STM32CanFD &standard();
     STM32CanFD &extended();
@@ -35,61 +47,57 @@ public:
     using Stream::write;
     int endPacket();
 
-    /* --- 受信関連 --- */
     bool parsePacket();
     virtual int available() override;
     virtual int read() override;
     virtual int peek() override;
     virtual void flush() override {}
 
-    uint32_t packetId() { return _rxHeader.Identifier; }
-    bool packetExtended() { return _rxHeader.IdType == FDCAN_EXTENDED_ID; }
-    bool packetRtr() { return _rxHeader.RxFrameType == FDCAN_REMOTE_FRAME; }
-    bool packetFdf() { return _rxHeader.FDFormat == FDCAN_FD_CAN; }
-    bool packetBrs() { return _rxHeader.BitRateSwitch == FDCAN_BRS_ON; }
-    uint8_t packetDlc() { return _rxHeader.DataLength; }
+    uint32_t packetId() { return _currentRx.header.identifier; }
+    uint8_t packetFifo() { return _currentRx.fifo; }
+    bool packetExtended() { return _currentRx.header.extended != 0; }
+    bool packetRtr() { return _currentRx.header.remote != 0; }
+    bool packetFdf() { return _currentRx.header.fdFormat != 0; }
+    bool packetBrs() { return _currentRx.header.brs != 0; }
+    uint8_t packetDlc() { return _currentRx.header.dataLength; }
+#endif
 
-    /* --- フィルタ設定 --- */
-    bool setFilter(uint8_t index, uint32_t id, uint32_t mask, bool isExtended = false);
-
-    /* --- 状態取得 --- */
+    int readPacket(uint8_t fifo, CanMessageHeader *header, uint8_t *buffer);
+    bool setFilter(uint8_t index, uint32_t id, uint32_t mask, bool isExtended = false, int fifo = 0);
+    bool sendPacket(const CanMessageHeader &header, const uint8_t *data, size_t len);
     uint32_t getErrorCode();
     bool isBusOff();
-
-    // HALコールバック用内部関数
     void irqHandler();
+    FDCAN_HandleTypeDef _hfdcan;
 
 private:
-    FDCAN_HandleTypeDef _hfdcan;
-    FDCAN_TxHeaderTypeDef _txHeader;
-    FDCAN_RxHeaderTypeDef _rxHeader;
-
     uint32_t _rxPin, _txPin;
     uint32_t _mode;
-    bool _is_fd_enabled;
 
-    // 送信一時バッファ
+#if STM32CANFD_STREAM_API
+    CanMessageHeader _txHeader;
     uint8_t _txData[64];
     size_t _txBufferIdx;
-    int _txFormat;
-    bool _txBrs;
+    bool _txFormatExplicit;
 
-    // 受信リングバッファ (割り込み用)
-    static const size_t RX_BUFFER_SIZE = 512;
+    static const size_t RX_BUFFER_SIZE = 64;
     uint8_t _rxBuffer[RX_BUFFER_SIZE];
     volatile size_t _rxHead;
     size_t _rxTail;
 
-    // 受信済みパケット情報
     struct RxPacketMeta
     {
-        FDCAN_RxHeaderTypeDef header;
-        size_t length;
+        CanMessageHeader header;
+        uint8_t length;
+        uint8_t fifo;
     } _currentRx;
+#endif
 
     void applyBaudrate(uint32_t nom, uint32_t data);
     static uint8_t len2dlc(size_t len);
     static size_t dlc2len(uint32_t dlc);
+    static FDCAN_TxHeaderTypeDef expandTxHeader(const CanMessageHeader &header);
+    static CanMessageHeader compactRxHeader(const FDCAN_RxHeaderTypeDef &header);
 };
 
 #endif
