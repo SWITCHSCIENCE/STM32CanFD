@@ -75,7 +75,8 @@ void loop() {
   // フィルター設定テスト用の送信 (1秒ごとに異なるIDで送信)
   if (millis() - lastSend > 500) {
     uint32_t testIds[] = { 0x100, 0x250, 0x300, 0x400, 0x500, 0x1000, 0x2500, 0x3000, 0x4000, 0x5000 };  // フィルター対象 + 非対象
-    uint32_t sendId = testIds[testIndex % 5];
+    int num_ids = sizeof(testIds)/sizeof(testIds[0]);
+    uint32_t sendId = testIds[testIndex % num_ids];
 
     CANFD.beginPacket(sendId);
     CANFD.write(0xAA);
@@ -87,8 +88,10 @@ void loop() {
     Serial.print("送信 ID: 0x");
     Serial.print(sendId, HEX);
     Serial.print(" (テスト ");
-    Serial.print(testIndex % 5 + 1);
-    Serial.println("/5)");
+    Serial.print(testIndex % num_ids + 1);
+    Serial.print("/");
+    Serial.print(num_ids);
+    Serial.println(")");
 
     lastSend = millis();
     testIndex++;

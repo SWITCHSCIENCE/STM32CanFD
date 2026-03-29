@@ -21,6 +21,11 @@ void setup() {
     while (1)
       ;
   }
+
+  // 全通しフィルターを設定（すべてのメッセージを受信）
+  // 注意: 実際の使用では、setFilterMask()などで必要なIDのみ受信するフィルターを設定してください
+  CanFD.setFilterMask(0, 0x000, 0x000);  // 全IDを通す
+
   Serial.println("FDCAN Ready.");
 }
 

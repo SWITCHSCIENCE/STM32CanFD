@@ -105,16 +105,16 @@ bool STM32CanFD::begin(uint32_t nomBaud, uint32_t dataBaud)
     if (HAL_FDCAN_Init(&hfdcan) != HAL_OK)
         return false;
 
-    // フィルタ：デフォルトは全通し（FIFO0へ）
+    // フィルタ：デフォルトは無効（ユーザーが設定するまで何も受信しない）
     FDCAN_FilterTypeDef sFilterConfig;
     sFilterConfig.IdType = FDCAN_STANDARD_ID;
     sFilterConfig.FilterIndex = 0;
     sFilterConfig.FilterType = FDCAN_FILTER_MASK;
-    sFilterConfig.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
+    sFilterConfig.FilterConfig = FDCAN_FILTER_DISABLE;
     sFilterConfig.FilterID1 = 0x000;
     sFilterConfig.FilterID2 = 0x000;
     HAL_FDCAN_ConfigFilter(&hfdcan, &sFilterConfig);
-    HAL_FDCAN_ConfigGlobalFilter(&hfdcan, FDCAN_ACCEPT_IN_RX_FIFO0, FDCAN_ACCEPT_IN_RX_FIFO0, FDCAN_FILTER_REMOTE, FDCAN_FILTER_REMOTE);
+    HAL_FDCAN_ConfigGlobalFilter(&hfdcan, FDCAN_REJECT, FDCAN_REJECT, FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE);
 
     // 割り込み設定
     HAL_FDCAN_ActivateNotification(&hfdcan, FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO1_NEW_MESSAGE, 0);
