@@ -1,6 +1,17 @@
 #include "STM32CanFD.h"
 
-/* 送信フォーマット指定用 */
+/*
+ * _txHeader.fdFormat の決定ロジック (提案1: 明示的指定の有無で分岐)
+ * =====================================================================
+ * 1. classic() または fd() で明示的に指定された場合
+ *    → その指定に従う（_txFormatExplicit = true）
+ *
+ * 2. 明示的指定なし（beginPacket()のみ）
+ *    → データ送信時に以下で判定：
+ *       - データ ≤ 8バイト  : begin()で指定されたフレームフォーマット継承
+ *       - データ > 8バイト  : 自動的にCANFD (fdFormat=1) に切り替え
+ *                           クラシックCAN最大8バイトの制約を超えるため
+ */
 
 // 複数のインスタンス管理用
 static STM32CanFD *_instances[3] = {NULL, NULL, NULL};
@@ -231,6 +242,11 @@ void STM32CanFD::applyBaudrate(uint32_t nom, uint32_t data)
 /* --- 送信ロジック --- */
 
 #if STM32CANFD_STREAM_API
+/**
+ * beginPacket - パケット送信を開始
+ * begin()で指定されたフレームフォーマットに基づいて_txHeaderを初期化
+ * _txFormatExplicit = false で設定し、classic()やfd()の呼び出しが可能に
+ */
 STM32CanFD &STM32CanFD::beginPacket(uint32_t id)
 {
     _txHeader.identifier = id;
@@ -240,13 +256,14 @@ STM32CanFD &STM32CanFD::beginPacket(uint32_t id)
     _txHeader.fdFormat = 0;
     _txHeader.brs = 0;
     _txHeader.esiPassive = 0;
+    // begin()で指定されたフレームフォーマットを反映
     if (hfdcan.Init.FrameFormat != FDCAN_FRAME_CLASSIC)
     {
         _txHeader.fdFormat = 1;
         _txHeader.brs = 1;
     }
     _txBufferIdx = 0;
-    _txFormatExplicit = false;
+    _txFormatExplicit = false;  // 明示的指定なしのマーク
     return *this;
 }
 
@@ -262,19 +279,31 @@ STM32CanFD &STM32CanFD::extended()
     return *this;
 }
 
+/**
+ * fd - CANFD フォーマットを明示的に指定
+ * このメソッド呼び出しで _txFormatExplicit = true となり、
+ * endPacket()で自動判定は行われず、ここで指定した値が確定する
+ *
+ * @param brs - Bit Rate Switching (true: BRS有効, false: BRS無効)
+ */
 STM32CanFD &STM32CanFD::fd(bool brs)
 {
     _txHeader.fdFormat = 1;
     _txHeader.brs = brs ? 1 : 0;
-    _txFormatExplicit = true;
+    _txFormatExplicit = true;  // 明示的指定のマーク
     return *this;
 }
 
+/**
+ * classic - クラシックCANフォーマットを明示的に指定
+ * このメソッド呼び出しで _txFormatExplicit = true となり、
+ * endPacket()で自動判定は行われず、ここで指定した値が確定する
+ */
 STM32CanFD &STM32CanFD::classic()
 {
     _txHeader.fdFormat = 0;
     _txHeader.brs = 0;
-    _txFormatExplicit = true;
+    _txFormatExplicit = true;  // 明示的指定のマーク
     return *this;
 }
 
@@ -296,11 +325,26 @@ size_t STM32CanFD::write(const uint8_t *buffer, size_t size)
     return n;
 }
 
+/**
+ * endPacket - パケット送信を終了
+ *
+ * _txFormatExplicit のフラグに基づいて異なる動作：
+ *
+ * 1. _txFormatExplicit == true（classic()またはfd()で明示的に指定）
+ *    → その指定が確定、自動判定なし
+ *
+ * 2. _txFormatExplicit == false（明示的指定なし）
+ *    → 自動判定ロジックが実行される：
+ *       - _txBufferIdx ≤ 8  : クラシックCAN（fdFormat は変わらず）
+ *       - _txBufferIdx > 8  : 自動的にCANFD (fdFormat = 1) に切り替え
+ *                             クラシックCAN最大8バイト制約の回避
+ */
 int STM32CanFD::endPacket()
 {
+    // 明示的指定がなく、データが8バイトを超える場合のみ自動判定
     if (!_txFormatExplicit && _txBufferIdx > 8)
     {
-        _txHeader.fdFormat = 1;
+        _txHeader.fdFormat = 1;  // 自動的にCANFDに切り替え
     }
 
     _txHeader.dataLength = len2dlc(_txBufferIdx);
