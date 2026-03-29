@@ -13,9 +13,6 @@ void setup() {
   pinMode(pinVIO, OUTPUT);
   digitalWrite(pinVIO, HIGH);
 
-  // G431/G474などのピン配置例 (RX:PB8, TX:PB9)
-  CanFD.setPins(PB8, PB9);
-
   // 500kbps (Nominal)
   if (!CanFD.begin(500000)) {
   // 500kbps (Nominal) / 2Mbps (Data)
