@@ -63,8 +63,10 @@ public:
 #endif
 
     int readPacket(uint8_t fifo, CanMessageHeader *header, uint8_t *buffer);
-    bool setFilter(uint8_t index, uint32_t id, uint32_t mask, bool isExtended = false, int fifo = 0);
-    bool sendPacket(const CanMessageHeader &header, const uint8_t *data, size_t len);
+    bool setFilterMask(uint8_t index, uint32_t id, uint32_t mask, bool isExtended = false, int fifo = 0);
+    bool setFilterRange(uint8_t index, uint32_t id1, uint32_t id2, bool isExtended = false, int fifo = 0);
+    bool setFilterDual(uint8_t index, uint32_t id1, uint32_t id2, bool isExtended = false, int fifo = 0);
+    bool sendPacket(const CanMessageHeader &header, const uint8_t *data);
     uint32_t getErrorCode();
     bool isBusOff();
     void irqHandler();

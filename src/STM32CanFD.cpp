@@ -311,7 +311,7 @@ int STM32CanFD::endPacket()
         memset(&_txData[_txBufferIdx], 0, fullLen - _txBufferIdx);
     }
 
-    return sendPacket(_txHeader, _txData, _txBufferIdx) ? 1 : 0;
+    return sendPacket(_txHeader, _txData) ? 1 : 0;
 }
 
 /* --- 受信ロジック --- */
@@ -361,15 +361,13 @@ int STM32CanFD::readPacket(uint8_t fifo, CanMessageHeader *header, uint8_t *buff
     return (int)dlc2len(header->dataLength);
 }
 
-bool STM32CanFD::sendPacket(const CanMessageHeader &header, const uint8_t *data, size_t len)
+bool STM32CanFD::sendPacket(const CanMessageHeader &header, const uint8_t *data)
 {
-    (void)len;
-
     FDCAN_TxHeaderTypeDef txHeader = expandTxHeader(header);
     return HAL_FDCAN_AddMessageToTxFifoQ(&_hfdcan, &txHeader, (uint8_t *)data) == HAL_OK;
 }
 
-bool STM32CanFD::setFilter(uint8_t index, uint32_t id, uint32_t mask, bool isExtended, int fifo)
+bool STM32CanFD::setFilterMask(uint8_t index, uint32_t id, uint32_t mask, bool isExtended, int fifo)
 {
     FDCAN_FilterTypeDef sFilterConfig;
     sFilterConfig.IdType = isExtended ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
@@ -378,6 +376,32 @@ bool STM32CanFD::setFilter(uint8_t index, uint32_t id, uint32_t mask, bool isExt
     sFilterConfig.FilterConfig = (fifo == 1) ? FDCAN_FILTER_TO_RXFIFO1 : FDCAN_FILTER_TO_RXFIFO0;
     sFilterConfig.FilterID1 = id;
     sFilterConfig.FilterID2 = mask;
+
+    return HAL_FDCAN_ConfigFilter(&_hfdcan, &sFilterConfig) == HAL_OK;
+}
+
+bool STM32CanFD::setFilterRange(uint8_t index, uint32_t id1, uint32_t id2, bool isExtended, int fifo)
+{
+    FDCAN_FilterTypeDef sFilterConfig;
+    sFilterConfig.IdType = isExtended ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
+    sFilterConfig.FilterIndex = index;
+    sFilterConfig.FilterType = FDCAN_FILTER_RANGE;
+    sFilterConfig.FilterConfig = (fifo == 1) ? FDCAN_FILTER_TO_RXFIFO1 : FDCAN_FILTER_TO_RXFIFO0;
+    sFilterConfig.FilterID1 = id1;
+    sFilterConfig.FilterID2 = id2;
+
+    return HAL_FDCAN_ConfigFilter(&_hfdcan, &sFilterConfig) == HAL_OK;
+}
+
+bool STM32CanFD::setFilterDual(uint8_t index, uint32_t id1, uint32_t id2, bool isExtended, int fifo)
+{
+    FDCAN_FilterTypeDef sFilterConfig;
+    sFilterConfig.IdType = isExtended ? FDCAN_EXTENDED_ID : FDCAN_STANDARD_ID;
+    sFilterConfig.FilterIndex = index;
+    sFilterConfig.FilterType = FDCAN_FILTER_DUAL;
+    sFilterConfig.FilterConfig = (fifo == 1) ? FDCAN_FILTER_TO_RXFIFO1 : FDCAN_FILTER_TO_RXFIFO0;
+    sFilterConfig.FilterID1 = id1;
+    sFilterConfig.FilterID2 = id2;
 
     return HAL_FDCAN_ConfigFilter(&_hfdcan, &sFilterConfig) == HAL_OK;
 }
