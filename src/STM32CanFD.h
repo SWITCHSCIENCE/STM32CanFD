@@ -63,14 +63,22 @@ public:
 #endif
 
     int readPacket(uint8_t fifo, CanMessageHeader *header, uint8_t *buffer);
-    bool setFilterMask(uint8_t index, uint32_t id, uint32_t mask, bool isExtended = false, int fifo = 0);
-    bool setFilterRange(uint8_t index, uint32_t id1, uint32_t id2, bool isExtended = false, int fifo = 0);
-    bool setFilterDual(uint8_t index, uint32_t id1, uint32_t id2, bool isExtended = false, int fifo = 0);
     bool sendPacket(const CanMessageHeader &header, const uint8_t *data);
+
+    // Standard ID filters (index: 0-27)
+    bool setFilterMask(uint8_t index, uint32_t id, uint32_t mask, int fifo = 0);
+    bool setFilterRange(uint8_t index, uint32_t id1, uint32_t id2, int fifo = 0);
+    bool setFilterDual(uint8_t index, uint32_t id1, uint32_t id2, int fifo = 0);
+
+    // Extended ID filters (index: 0-7)
+    bool setFilterMaskExt(uint8_t index, uint32_t id, uint32_t mask, int fifo = 0);
+    bool setFilterRangeExt(uint8_t index, uint32_t id1, uint32_t id2, int fifo = 0);
+    bool setFilterDualExt(uint8_t index, uint32_t id1, uint32_t id2, int fifo = 0);
+
     uint32_t getErrorCode();
     bool isBusOff();
     void irqHandler();
-    FDCAN_HandleTypeDef _hfdcan;
+    FDCAN_HandleTypeDef hfdcan;
 
 private:
     uint32_t _rxPin, _txPin;
